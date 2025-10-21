@@ -1,11 +1,30 @@
 import socket
 import argparse
+import threading
+from queue import Queue
 
-common_ports = [21, 22, 23, 25, 53, 80, 110, 139, 143, 443, 445, 3306, 3389, 5900, 8080]
+COMMON_PORTS = [21, 22, 23, 25, 53, 80, 110, 139, 143, 443, 445, 3306, 3389, 5900, 8080]
+print_lock = threading.Lock()
+
+def scan(port, target_ip, timeout, queue_results):
+    try:    
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            result = s.connect_ex((target_ip, port))
+            if result == 0:
+                queue_results.put(port)
+    except Exception as e:
+        pass
 
 def port_scannner(target, ports, timeout):
-    if ports == "common_ports" or ports == "common":
-        ports_to_scan = common_ports
+    try:
+        target_ip = socket.gethostbyname(target)
+    except socket.gaierror:
+        print(f"[!] Cannot resolve '{target}': Unknown host")
+        return
+    
+    if ports.lower() in ['common_ports', 'common']:
+        ports_to_scan = COMMON_PORTS
     else:
         if '-' in ports:
             start_port, end_port = map(int, ports.split('-'))
@@ -15,22 +34,37 @@ def port_scannner(target, ports, timeout):
             ports_to_scan = sorted(set(ports_to_scan))
         else:
             ports_to_scan = [int(ports)]
-        
+    
+    results_queue = Queue()
+    
     print("="*40)        
-    print(f"Scanning target: {target}")
-    print(f"{len(ports_to_scan)} ports to be scanned")
-    print("="*40)
+    print(f"[*] Scanning target: {target}")
+    print(f"[*] IP address: {target_ip}")
+    print(f"[*] {len(ports_to_scan)} ports to scan.")
+
+    threads = []
     for port in ports_to_scan:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        result = sock.connect_ex((target, port))
-        if result == 0:
-            print(f"[+] Port {port}: Open")
-            sock.close()
-        else:
-            sock.close()
+        t = threading.Thread(target=scan, args=(port,target_ip,timeout,results_queue))
+        threads.append(t)
+        t.start()
+    
+    for t in threads:
+        t.join()
+        
+    open_ports = []
+    while not results_queue.empty():
+        open_ports.append(results_queue.get())
+
     print("="*40)       
-    print("Scan complete.")
+    print("[+] Scan complete!")
+    if open_ports:
+        print(f"[+] Found {len(open_ports)} open ports")
+        print("-"*40)
+        for port in sorted(open_ports):
+            print(f"[+] Port {port} is open")
+    else:
+        print("[-] No open ports found.")
+    print("="*40)
             
 def main():
     parser = argparse.ArgumentParser(description="Simple Port Scanner")
